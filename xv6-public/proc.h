@@ -34,6 +34,18 @@ struct context {
 
 enum procstate { UNUSED, EMBRYO, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+enum schedule_policy { MLFQ, STRIDE };
+
+struct mlfq_info {
+  int level;          // level of queue where this process exists
+  int executed_ticks; // the number of ticks to which this process was executed in current level
+};
+
+struct stride_info {
+  double stride;
+  double pass;
+};
+
 // Per-process state
 struct proc {
   uint sz;                     // Size of process memory (bytes)
@@ -49,6 +61,13 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+
+  // informations for scheduling
+  enum schedule_policy schedule_type;
+  union {
+    struct mlfq_info mlfq;
+    struct stride_info stride;
+  };
 };
 
 // Process memory is laid out contiguously, low addresses first:

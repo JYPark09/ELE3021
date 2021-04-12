@@ -16,11 +16,11 @@ int main(int argc, char** argv)
   {
     if (pid > 0)
     {
-      printf(1, "Parent\n");
+      write(1, "Parent\n", 8);
     }
     else if (pid == 0)
     {
-      printf(1, "Child\n");
+      write(1, "Child\n", 7);
     }
 
     yield();

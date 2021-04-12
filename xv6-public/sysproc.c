@@ -102,3 +102,28 @@ sys_yield(void)
   yield();
   return 0;
 }
+
+int
+sys_getlev(void)
+{
+  struct proc *p = myproc();
+
+  // if proc is not mlfq mode, return failure
+  if (p->schedule_type != MLFQ)
+    return -1;
+
+  return myproc()->mlfq.level;
+}
+
+int
+sys_set_cpu_share(void)
+{
+  int share;
+
+  if (argint(0, &share) < 0)
+    return -1;
+
+  //TODO: imple this
+
+  return 0;
+}
