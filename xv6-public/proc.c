@@ -7,10 +7,91 @@
 #include "proc.h"
 #include "spinlock.h"
 
+#define NUM_MLFQ_LEVEL 3
+#define MLFQ_CPU_SHARE 20
+
+#define STRIDE_TOTAL_TICKETS 100
+
 struct {
   struct spinlock lock;
   struct proc proc[NPROC];
 } ptable;
+
+typedef struct proc_queue {
+  struct proc *data[NPROC];
+  int front, rear;
+} proc_queue_t;
+
+struct {
+  proc_queue_t queue[NUM_MLFQ_LEVEL]; // multi-level queue
+  int          executed_ticks;        // the number of ticks to which MFLQ scheduler worked
+
+  double       pass;
+} mlfq_mgr;
+
+void mlfq_init()
+{
+  int lev;
+  proc_queue_t *queue = &mlfq_mgr.queue[0];
+
+  for (lev = 0; lev < NUM_MLFQ_LEVEL; ++lev, ++queue)
+  {
+    memset(queue->data, 0, sizeof(struct proc*) * NPROC);
+
+    queue->front = 0;
+    queue->rear = 0;
+  }
+}
+
+//! insert proc at mlfq queue
+//! \param lev level of queue to insert
+//! \param proc process to insert
+//! \return 0 if success else -1
+int mlfq_enqueue(int lev, struct proc *proc)
+{
+  proc_queue_t *const queue = &mlfq_mgr.queue[lev];
+  
+  // if queue is full, return failure
+  if (queue->front == ((queue->rear + 1) % NPROC))
+    return -1;
+
+  queue->rear = (queue->rear + 1) % NPROC;
+  queue->data[queue->rear] = proc;
+
+  proc->mlfq.level = lev;
+
+  return 0;
+}
+
+//! dequeue head proc from mlfq queue
+//! \param lev level of queue to dequeue
+//! \return level of dequeued proc if success else -1
+int mlfq_dequeue(int lev, struct proc **proc)
+{
+  proc_queue_t *const queue = &mlfq_mgr.queue[lev];
+
+  // if queue is empty, return failure
+  if (queue->front == queue->rear)
+    return -1;
+
+  queue->front = (queue->front + 1) % NPROC;
+  *proc = queue->data[queue->front];
+
+  (*proc)->mlfq.level = -1;
+
+  return lev;
+}
+
+typedef struct proc_min_heap {
+  struct proc *data[NPROC];
+  int size;
+} proc_min_heap_t;
+
+struct {
+  proc_min_heap_t queue;
+
+  double pass;
+} stride_mgr;
 
 static struct proc *initproc;
 
@@ -88,6 +169,10 @@ allocproc(void)
 found:
   p->state = EMBRYO;
   p->pid = nextpid++;
+
+  // scheduling init
+  p->schedule_type = MLFQ;
+  mlfq_enqueue(0, p);
 
   release(&ptable.lock);
 
@@ -326,6 +411,8 @@ scheduler(void)
   struct cpu *c = mycpu();
   c->proc = 0;
   
+  mlfq_init();
+
   for(;;){
     // Enable interrupts on this processor.
     sti();
@@ -488,6 +575,13 @@ kill(int pid)
       // Wake process from sleep if necessary.
       if(p->state == SLEEPING)
         p->state = RUNNABLE;
+
+      // remove from scheduler
+      if (p->schedule_type == MLFQ)
+      {
+
+      }
+
       release(&ptable.lock);
       return 0;
     }
