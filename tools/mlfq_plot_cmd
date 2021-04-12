@@ -1,0 +1,10 @@
+grep pid log > stat
+python3 ../tools/mlfq_plot.py stat
+
+gnuplot
+set grid
+set title "MLFQ Scheduling"
+set xlabel "MLFQ executed ticks"
+set ylabel "level of executed process"
+pl [][:3] 'stat_3' u 1:2, 'stat_4' u 1:2
+
