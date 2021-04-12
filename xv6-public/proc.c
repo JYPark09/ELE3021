@@ -9,6 +9,7 @@
 
 #define NUM_MLFQ_LEVEL 3
 #define MLFQ_CPU_SHARE 20
+#define MLFQ_BOOSTING_INTERVAL 100
 
 #define STRIDE_TOTAL_TICKETS 100
 
@@ -20,6 +21,7 @@ struct {
 typedef struct proc_queue {
   struct proc *data[NPROC];
   int front, rear;
+  int size;
 } proc_queue_t;
 
 struct {
@@ -32,15 +34,19 @@ struct {
 void mlfq_init()
 {
   int lev;
-  proc_queue_t *queue = &mlfq_mgr.queue[0];
+  proc_queue_t *queue;
 
-  for (lev = 0; lev < NUM_MLFQ_LEVEL; ++lev, ++queue)
+  for (lev = 0; lev < NUM_MLFQ_LEVEL; ++lev)
   {
-    memset(queue->data, 0, sizeof(struct proc*) * NPROC);
+    queue = &mlfq_mgr.queue[lev];
 
-    queue->front = 0;
+    queue->front = 1;
     queue->rear = 0;
+    queue->size = 0;
   }
+
+  mlfq_mgr.executed_ticks = 0;
+  mlfq_mgr.pass = 0;
 }
 
 //! insert proc at mlfq queue
@@ -52,11 +58,12 @@ int mlfq_enqueue(int lev, struct proc *proc)
   proc_queue_t *const queue = &mlfq_mgr.queue[lev];
   
   // if queue is full, return failure
-  if (queue->front == ((queue->rear + 1) % NPROC))
+  if (queue->size == NPROC)
     return -1;
 
   queue->rear = (queue->rear + 1) % NPROC;
   queue->data[queue->rear] = proc;
+  ++queue->size;
 
   proc->mlfq.level = lev;
 
@@ -66,20 +73,62 @@ int mlfq_enqueue(int lev, struct proc *proc)
 //! dequeue head proc from mlfq queue
 //! \param lev level of queue to dequeue
 //! \return level of dequeued proc if success else -1
-int mlfq_dequeue(int lev, struct proc **proc)
+int mlfq_dequeue(int lev, struct proc **ret)
+{
+  proc_queue_t *const queue = &mlfq_mgr.queue[lev];
+  struct proc* p;
+
+  // if queue is empty, return failure
+  if (queue->size == 0)
+    return -1;
+
+  p = queue->data[queue->front];
+  queue->data[queue->front] = 0;
+
+  queue->front = (queue->front + 1) % NPROC;
+  --queue->size;
+
+  p->mlfq.level = -1;
+
+  if (ret != 0)
+    *ret = p;
+
+  return lev;
+}
+
+void mlfq_remove(struct proc *p)
+{
+  proc_queue_t *const queue = &mlfq_mgr.queue[p->mlfq.level];
+
+  int idx, i;
+
+  for (idx = 0; idx < NPROC; ++idx)
+  {
+    if (queue->data[idx] == p)
+    {
+      break;
+    }
+  }
+
+  i = idx;
+  while (i != queue->front)
+  {
+    queue->data[i] = queue->data[i ? i-1 : NPROC-1];
+
+    i = i ? i-1 : NPROC-1;
+  }
+  queue->data[queue->front] = 0;
+
+  queue->front = (queue->front) % NPROC;
+}
+
+//! returns front proc
+//! \param lev level of queue
+struct proc* mlfq_front(int lev)
 {
   proc_queue_t *const queue = &mlfq_mgr.queue[lev];
 
-  // if queue is empty, return failure
-  if (queue->front == queue->rear)
-    return -1;
-
-  queue->front = (queue->front + 1) % NPROC;
-  *proc = queue->data[queue->front];
-
-  (*proc)->mlfq.level = -1;
-
-  return lev;
+  return queue->data[queue->front];
 }
 
 typedef struct proc_min_heap {
@@ -105,6 +154,8 @@ void
 pinit(void)
 {
   initlock(&ptable.lock, "ptable");
+
+  mlfq_init();
 }
 
 // Must be called with interrupts disabled
@@ -172,7 +223,11 @@ found:
 
   // scheduling init
   p->schedule_type = MLFQ;
-  mlfq_enqueue(0, p);
+  if (mlfq_enqueue(0, p) != 0)
+  {
+    release(&ptable.lock);
+    return 0;
+  }
 
   release(&ptable.lock);
 
@@ -396,6 +451,98 @@ wait(void)
   }
 }
 
+struct proc*
+mlfq_choose()
+{
+  static const int TIME_QUANTUM[] = { 1, 2, 4 };
+  static const int TIME_ALLOTMENT[] = { 5, 10 };
+
+  struct proc *ret;
+  int lev = 0, size, i;
+  
+  while (1)
+  {
+    for (; lev < NUM_MLFQ_LEVEL; ++lev)
+    {
+      if (mlfq_mgr.queue[lev].size > 0)
+        break;
+    }
+
+    // if there is no process in the mlfq
+    if (lev == NUM_MLFQ_LEVEL)
+      return 0;
+
+    size = mlfq_mgr.queue[lev].size;
+    for (i = 0; i < size; ++i)
+    {
+      if ((ret = mlfq_front(lev))->state != RUNNABLE)
+      {
+        mlfq_dequeue(lev, 0);
+        mlfq_enqueue(lev, ret);
+      }
+      else
+      {
+        goto found;
+      }
+    }
+
+    // queue has no runnable process
+    // then find candidate at next lower queue
+    ++lev;
+  }
+ 
+found:
+  //cprintf("pid: %d, level: %d, ticks: %d[%d]\n", ret->pid, ret->mlfq.level, ret->mlfq.executed_ticks, TIME_QUANTUM[ret->mlfq.level]);
+
+  ++ret->mlfq.executed_ticks;
+  ++mlfq_mgr.executed_ticks;
+
+  if (lev < NUM_MLFQ_LEVEL - 1 && ret->mlfq.executed_ticks >= TIME_ALLOTMENT[lev])
+  {
+    mlfq_dequeue(lev, 0);
+    mlfq_enqueue(lev+1, ret);
+
+    ret->mlfq.executed_ticks = 0;
+  }
+  else if (ret->mlfq.executed_ticks % TIME_QUANTUM[lev] == 0)
+  {
+    mlfq_dequeue(lev, 0);
+    mlfq_enqueue(lev, ret);
+
+    if (lev == NUM_MLFQ_LEVEL - 1)
+      ret->mlfq.executed_ticks = 0;
+  }
+
+  return ret;
+}
+
+void
+mlfq_boosting()
+{
+  struct proc *p;
+  int lev;
+  for (lev = 1; lev < NUM_MLFQ_LEVEL; ++lev)
+  {
+    while (mlfq_mgr.queue[lev].size)
+    {
+      mlfq_dequeue(lev, &p);
+      mlfq_enqueue(0, p);
+
+      p->mlfq.executed_ticks = 0;
+    }
+  }
+
+  mlfq_mgr.executed_ticks = 0;
+}
+
+//! choose next process
+//! ptable must be locked before calling.
+struct proc*
+schedule_choose()
+{
+  return mlfq_choose();
+}
+
 //PAGEBREAK: 42
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
@@ -410,8 +557,6 @@ scheduler(void)
   struct proc *p;
   struct cpu *c = mycpu();
   c->proc = 0;
-  
-  mlfq_init();
 
   for(;;){
     // Enable interrupts on this processor.
@@ -419,10 +564,11 @@ scheduler(void)
 
     // Loop over process table looking for process to run.
     acquire(&ptable.lock);
-    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
-      if(p->state != RUNNABLE)
-        continue;
 
+    p = schedule_choose();
+
+    if(p != 0 && p->state == RUNNABLE)
+    {
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
@@ -436,9 +582,22 @@ scheduler(void)
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
-    }
-    release(&ptable.lock);
 
+      if (p->state == UNUSED)
+      {
+        if (p->schedule_type == MLFQ)
+        {
+          mlfq_remove(p);
+        }
+      }
+    }
+
+    if (mlfq_mgr.executed_ticks >= MLFQ_BOOSTING_INTERVAL)
+    {
+      mlfq_boosting();
+    }
+
+    release(&ptable.lock);
   }
 }
 
@@ -575,12 +734,6 @@ kill(int pid)
       // Wake process from sleep if necessary.
       if(p->state == SLEEPING)
         p->state = RUNNABLE;
-
-      // remove from scheduler
-      if (p->schedule_type == MLFQ)
-      {
-
-      }
 
       release(&ptable.lock);
       return 0;
