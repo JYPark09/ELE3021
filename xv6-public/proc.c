@@ -53,9 +53,9 @@ void mlfq_init()
 
 //! insert proc at mlfq queue
 //! \param lev level of queue to insert
-//! \param proc process to insert
+//! \param p process to insert
 //! \return 0 if success else -1
-int mlfq_enqueue(int lev, struct proc *proc)
+int mlfq_enqueue(int lev, struct proc *p)
 {
   proc_queue_t *const queue = &mlfq_mgr.queue[lev];
   
@@ -64,10 +64,10 @@ int mlfq_enqueue(int lev, struct proc *proc)
     return -1;
 
   queue->rear = (queue->rear + 1) % NPROC;
-  queue->data[queue->rear] = proc;
+  queue->data[queue->rear] = p;
   ++queue->size;
 
-  proc->mlfq.level = lev;
+  p->mlfq.level = lev;
 
   return 0;
 }
