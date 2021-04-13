@@ -40,6 +40,8 @@ void mlfq_init()
   {
     queue = &mlfq_mgr.queue[lev];
 
+    memset(queue->data, 0, sizeof(struct proc*) * NPROC);
+
     queue->front = 1;
     queue->rear = 0;
     queue->size = 0;
