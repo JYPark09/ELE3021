@@ -139,10 +139,16 @@ typedef struct proc_min_heap {
 } proc_min_heap_t;
 
 struct {
-  proc_min_heap_t queue;
+  proc_min_heap_t heap;
 
   double pass;
 } stride_mgr;
+
+void stride_init()
+{
+  stride_mgr.heap.size = 0;
+  stride_mgr.pass = 0;
+}
 
 static struct proc *initproc;
 
@@ -158,6 +164,7 @@ pinit(void)
   initlock(&ptable.lock, "ptable");
 
   mlfq_init();
+  stride_init();
 }
 
 // Must be called with interrupts disabled

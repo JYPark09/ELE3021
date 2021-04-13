@@ -108,22 +108,29 @@ sys_getlev(void)
 {
   struct proc *p = myproc();
 
+  if (p == 0)
+    return -1;
+
   // if proc is not mlfq mode, return failure
   if (p->schedule_type != MLFQ)
     return -1;
 
-  return myproc()->mlfq.level;
+  return p->mlfq.level;
 }
 
 int
 sys_set_cpu_share(void)
 {
+  struct proc *p;
   int share;
 
   if (argint(0, &share) < 0)
     return -1;
 
-  //TODO: imple this
+  if ((p = myproc()) == 0)
+  {
+    return -1;
+  }
 
-  return 0;
+  return set_cpu_share(p, share);
 }
