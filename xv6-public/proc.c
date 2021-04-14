@@ -613,6 +613,15 @@ int wait(void)
       havekids = 1;
       if (p->state == ZOMBIE)
       {
+        if (p->schedule_type == MLFQ)
+        {
+          mlfq_remove(p);
+        }
+        else if (p->schedule_type == STRIDE)
+        {
+          stride_remove(p);
+        }
+
         // Found one.
         pid = p->pid;
         kfree(p->kstack);
@@ -623,6 +632,13 @@ int wait(void)
         p->name[0] = 0;
         p->killed = 0;
         p->state = UNUSED;
+
+        // init schedule data
+        p->schedule_type = MLFQ;
+        p->stride.pass = 0;
+        p->stride.share = 0;
+        p->stride.stride = 0;
+
         release(&ptable.lock);
         return pid;
       }
@@ -804,18 +820,6 @@ void scheduler(void)
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
-
-      if (p->state == UNUSED)
-      {
-        if (p->schedule_type == MLFQ)
-        {
-          mlfq_remove(p);
-        }
-        else if (p->schedule_type == STRIDE)
-        {
-          stride_remove(p);
-        }
-      }
     }
 
     if (mlfq_mgr.executed_ticks >= MLFQ_BOOSTING_INTERVAL)
