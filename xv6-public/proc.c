@@ -105,17 +105,16 @@ void mlfq_remove(struct proc *p)
 {
   proc_queue_t *const queue = &mlfq_mgr.queue[p->mlfq.level];
 
-  int idx, i;
+  int i;
 
-  for (idx = 0; idx < NPROC; ++idx)
+  for (i = 0; i < NPROC; ++i)
   {
-    if (queue->data[idx] == p)
+    if (queue->data[i] == p)
     {
       break;
     }
   }
 
-  i = idx;
   while (i != queue->front)
   {
     queue->data[i] = queue->data[i ? i - 1 : NPROC - 1];
@@ -124,7 +123,8 @@ void mlfq_remove(struct proc *p)
   }
   queue->data[queue->front] = 0;
 
-  queue->front = (queue->front) % NPROC;
+  queue->front = (queue->front + 1) % NPROC;
+  --queue->size;
 }
 
 //! returns front proc
@@ -136,24 +136,22 @@ struct proc *mlfq_front(int lev)
   return queue->data[queue->front];
 }
 
-typedef struct proc_min_heap
-{
-  struct proc *data[NPROC];
-  int size;
-} proc_min_heap_t;
-
+// note: 2021-04-13
+// we can't use min heap.
+// because process that has min pass value is not runnable.
 struct
 {
-  proc_min_heap_t heap;
+  struct proc *list[NPROC];
+  int size;
 
   double pass;
 } stride_mgr;
 
 void stride_init()
 {
-  memset(stride_mgr.heap.data, 0, sizeof(struct proc *) * NPROC);
+  memset(stride_mgr.list, 0, sizeof(struct proc *) * NPROC);
+  stride_mgr.size = 0;
 
-  stride_mgr.heap.size = 0;
   stride_mgr.pass = 0;
 }
 
@@ -162,11 +160,52 @@ void stride_init()
 //! \return 0 if success else -1
 int stride_insert(struct proc *p)
 {
-  // if heap is full, return failure
-  if (stride_mgr.heap.size == NPROC)
+  int i, j;
+
+  // if list is full, return failure
+  if (stride_mgr.size == NPROC)
     return -1;
 
+  for (i = 0; i < stride_mgr.size; ++i)
+  {
+    if (stride_mgr.list[i]->stride.pass > p->stride.pass)
+      break;
+  }
+
+  for (j = stride_mgr.size; j > i; --j)
+  {
+    stride_mgr.list[j] = stride_mgr.list[j - 1];
+  }
+
+  stride_mgr.list[i] = p;
+  ++stride_mgr.size;
+
   return 0;
+}
+
+void stride_remove_idx(int i)
+{
+  for (; i < stride_mgr.size - 1; ++i)
+    stride_mgr.list[i] = stride_mgr.list[i + 1];
+
+  stride_mgr.list[--stride_mgr.size] = 0;
+}
+
+int stride_remove(struct proc *p)
+{
+  int i;
+
+  for (i = 0; i < stride_mgr.size; ++i)
+  {
+    if (stride_mgr.list[i] == p)
+    {
+      stride_remove_idx(i);
+
+      return 0;
+    }
+  }
+
+  return -1;
 }
 
 //! pop minimal pass process from stride scheduler
@@ -174,9 +213,18 @@ int stride_insert(struct proc *p)
 //! \return 0 if success else -1
 int stride_pop(struct proc **ret)
 {
-  // if heap is empty, return failure
-  if (stride_mgr.heap.size == 0)
-    return -1;
+  int i;
+
+  for (i = 0; i < stride_mgr.size; ++i)
+    if (stride_mgr.list[i]->state == RUNNABLE)
+      goto found;
+
+  // there is no suitable process to run
+  return -1;
+
+found:
+  *ret = stride_mgr.list[i];
+  stride_remove_idx(i);
 
   return 0;
 }
@@ -184,14 +232,49 @@ int stride_pop(struct proc **ret)
 //! returns minimal process
 struct proc *stride_min_proc()
 {
-  if (stride_mgr.heap.size == 0)
-    return 0;
+  int i;
 
-  return stride_mgr.heap.data[0];
+  for (i = 0; i < stride_mgr.size; ++i)
+    if (stride_mgr.list[i]->state == RUNNABLE)
+      return stride_mgr.list[i];
+
+  return 0;
+}
+
+void print_stride_info()
+{
+  int i;
+
+  cprintf("[stride info]\n");
+  cprintf("list size: %d\n", stride_mgr.size);
+
+  for (i = 0; i < NPROC; ++i)
+  {
+    cprintf("%d ", stride_mgr.list[i] ? stride_mgr.list[i]->pid : -1);
+  }
+
+  cprintf("\n");
+}
+
+void print_mlfq_info()
+{
+  int lev, i;
+
+  cprintf("[mlfq info]\n");
+  for (lev = 0; lev < NUM_MLFQ_LEVEL; ++lev)
+  {
+    cprintf("<level %d>\n", lev);
+    cprintf("size: %d\n", mlfq_mgr.queue[lev].size);
+
+    for (i = 0; i < mlfq_mgr.queue[lev].size; ++i)
+      cprintf("%d ", mlfq_mgr.queue[lev].data[(mlfq_mgr.queue[lev].front + i) % NPROC] ? mlfq_mgr.queue[lev].data[(mlfq_mgr.queue[lev].front + i) % NPROC]->pid : -1);
+
+    cprintf("\n");
+  }
 }
 
 //! returns the number of issued tickets
-//! ptable lock is required before calling.
+//! ptable locking is required before calling.
 int get_stride_total_tickets()
 {
   int i;
@@ -217,7 +300,7 @@ int set_cpu_share(struct proc *p, int share)
   tickets = get_stride_total_tickets();
 
   // if system has not enough tickets, return failure
-  if (tickets + share > STRIDE_TOTAL_TICKETS)
+  if (share <= 0 || tickets + share > STRIDE_TOTAL_TICKETS)
   {
     release(&ptable.lock);
     return -1;
@@ -565,6 +648,8 @@ mlfq_choose()
 
   struct proc *ret;
   int lev = 0, size, i;
+  
+  mlfq_mgr.pass += (stride_mgr.size > 0) * STRIDE_TOTAL_TICKETS / (double)MLFQ_CPU_SHARE;
 
   while (1)
   {
@@ -598,7 +683,7 @@ mlfq_choose()
   }
 
 found:
-  //cprintf("pid: %d, level: %d, ticks: %d[%d]\n", ret->pid, ret->mlfq.level, ret->mlfq.executed_ticks, TIME_QUANTUM[ret->mlfq.level]);
+  cprintf("pid: %d st: %d lv: %d t: %d strs: %d mlfq_p: %d strd_p: %d\n", ret->pid, ret->schedule_type, ret->mlfq.level, ret->mlfq.executed_ticks, stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
 
   ++ret->mlfq.executed_ticks;
   ++mlfq_mgr.executed_ticks;
@@ -640,12 +725,44 @@ void mlfq_boosting()
   mlfq_mgr.executed_ticks = 0;
 }
 
+struct proc *
+stride_choose()
+{
+  struct proc *p;
+
+  if (stride_pop(&p) != 0)
+    return 0;
+
+  cprintf("pid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
+
+  p->stride.pass += p->stride.stride;
+  stride_mgr.pass = p->stride.pass;
+
+  if (stride_insert(p) != 0)
+    panic("cannot insert process at stride");
+
+  return p;
+}
+
 //! choose next process
 //! ptable must be locked before calling.
 struct proc *
 schedule_choose()
 {
-  return mlfq_choose();
+  struct proc *const min_pass_proc = stride_min_proc();
+
+  // if (min_pass_proc != 0)
+  // {
+  //   print_stride_info();
+  //   cprintf("st: %d pass: %d mlfq_p: %d\n", min_pass_proc->schedule_type, (int)min_pass_proc->stride.pass, (int)mlfq_mgr.pass);
+  // }
+
+  // print_mlfq_info();
+
+  if (min_pass_proc == 0 || min_pass_proc->stride.pass >= mlfq_mgr.pass)
+    return mlfq_choose();
+
+  return stride_choose();
 }
 
 //PAGEBREAK: 42
@@ -693,6 +810,10 @@ void scheduler(void)
         if (p->schedule_type == MLFQ)
         {
           mlfq_remove(p);
+        }
+        else if (p->schedule_type == STRIDE)
+        {
+          stride_remove(p);
         }
       }
     }
