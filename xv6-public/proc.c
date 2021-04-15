@@ -144,6 +144,7 @@ struct
   struct proc *list[NPROC];
   int size;
 
+  int share;
   double pass;
 } stride_mgr;
 
@@ -152,6 +153,7 @@ void stride_init()
   memset(stride_mgr.list, 0, sizeof(struct proc *) * NPROC);
   stride_mgr.size = 0;
 
+  stride_mgr.share = 0;
   stride_mgr.pass = 0;
 }
 
@@ -177,6 +179,7 @@ int stride_insert(struct proc *p)
     stride_mgr.list[j] = stride_mgr.list[j - 1];
   }
 
+  stride_mgr.share += p->stride.share;
   stride_mgr.list[i] = p;
   ++stride_mgr.size;
 
@@ -185,6 +188,8 @@ int stride_insert(struct proc *p)
 
 void stride_remove_idx(int i)
 {
+  stride_mgr.share -= stride_mgr.list[i]->stride.share;
+
   for (; i < stride_mgr.size - 1; ++i)
     stride_mgr.list[i] = stride_mgr.list[i + 1];
 
@@ -277,18 +282,18 @@ void print_mlfq_info()
 //! ptable locking is required before calling.
 int get_stride_total_tickets()
 {
-  int i;
-  int ticket = MLFQ_CPU_SHARE;
+  // int i;
+  // int ticket = MLFQ_CPU_SHARE;
 
-  for (i = 0; i < NPROC; ++i)
-  {
-    if (ptable.proc[i].state != UNUSED && ptable.proc[i].schedule_type == STRIDE)
-    {
-      ticket += ptable.proc[i].stride.share;
-    }
-  }
+  // for (i = 0; i < NPROC; ++i)
+  // {
+  //   if (ptable.proc[i].state != UNUSED && ptable.proc[i].schedule_type == STRIDE)
+  //   {
+  //     ticket += ptable.proc[i].stride.share;
+  //   }
+  // }
 
-  return ticket;
+  return MLFQ_CPU_SHARE + stride_mgr.share;
 }
 
 int set_cpu_share(struct proc *p, int share)
@@ -310,7 +315,6 @@ int set_cpu_share(struct proc *p, int share)
 
   p->schedule_type = STRIDE;
   p->stride.share = share;
-  p->stride.stride = STRIDE_TOTAL_TICKETS / (double)share;
   p->stride.pass = stride_mgr.pass;
 
   stride_insert(p);
@@ -620,6 +624,14 @@ int wait(void)
         else if (p->schedule_type == STRIDE)
         {
           stride_remove(p);
+
+          // to prevent overflow, if there is no stride process
+          // clear the pass values.
+          if (stride_mgr.size == 0)
+          {
+            mlfq_mgr.pass = 0;
+            stride_mgr.pass = 0;
+          }
         }
 
         // Found one.
@@ -637,7 +649,6 @@ int wait(void)
         p->schedule_type = MLFQ;
         p->stride.pass = 0;
         p->stride.share = 0;
-        p->stride.stride = 0;
 
         release(&ptable.lock);
         return pid;
@@ -746,13 +757,15 @@ stride_choose()
 {
   struct proc *p;
 
+  stride_mgr.pass += (stride_mgr.size > 0) * STRIDE_TOTAL_TICKETS / (double)stride_mgr.share;
+
   if (stride_pop(&p) != 0)
     return 0;
 
   cprintf("pid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
 
-  p->stride.pass += p->stride.stride;
-  stride_mgr.pass = p->stride.pass;
+  p->stride.pass += STRIDE_TOTAL_TICKETS / (double)p->stride.share;
+  // stride_mgr.pass = p->stride.pass;
 
   if (stride_insert(p) != 0)
     panic("cannot insert process at stride");
@@ -765,17 +778,7 @@ stride_choose()
 struct proc *
 schedule_choose()
 {
-  struct proc *const min_pass_proc = stride_min_proc();
-
-  // if (min_pass_proc != 0)
-  // {
-  //   print_stride_info();
-  //   cprintf("st: %d pass: %d mlfq_p: %d\n", min_pass_proc->schedule_type, (int)min_pass_proc->stride.pass, (int)mlfq_mgr.pass);
-  // }
-
-  // print_mlfq_info();
-
-  if (min_pass_proc == 0 || min_pass_proc->stride.pass >= mlfq_mgr.pass)
+  if (stride_mgr.pass >= mlfq_mgr.pass)
     return mlfq_choose();
 
   return stride_choose();

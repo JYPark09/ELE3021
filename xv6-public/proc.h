@@ -44,7 +44,6 @@ struct mlfq_info {
 
 struct stride_info {
   int share;
-  double stride;
   double pass;
 };
 
