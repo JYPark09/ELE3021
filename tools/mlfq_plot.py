@@ -7,26 +7,20 @@ if len(sys.argv) != 2:
 with open(sys.argv[1], 'rt') as f:
   lines = f.readlines()
 
-stat_3_x = []
-stat_3_y = []
-stat_4_x = []
-stat_4_y = []
+stats = dict()
 
 for t, line in enumerate(lines, 0):
-  tokens = line.split()
-  pid, level = map(int, (tokens[1].strip(','), tokens[3].strip(',')))
+  pid = int(line.split()[1].strip(','))
 
-  x_data = stat_3_x if pid == 3 else stat_4_x
-  y_data = stat_3_y if pid == 3 else stat_4_y
+  if not pid in stats:
+    stats[pid] = []
 
-  x_data.append(t)
-  y_data.append(level)
+  stats[pid].append((t, line))
 
-with open('stat_3', 'wt') as f:
-  for x, y in zip(stat_3_x, stat_3_y):
-    f.write('{} {}\n'.format(x, y))
+print(stats.keys())
 
-with open('stat_4', 'wt') as f:
-  for x, y in zip(stat_4_x, stat_4_y):
-    f.write('{} {}\n'.format(x, y))
+for pid in stats:
+  with open(f'stat_{pid}', 'wt') as f:
+    for x, y in stats[pid]:
+      f.write('{} {}'.format(x, y))
 

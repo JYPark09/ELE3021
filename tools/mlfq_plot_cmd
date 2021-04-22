@@ -6,5 +6,5 @@ set grid
 set title "MLFQ Scheduling"
 set xlabel "MLFQ executed ticks"
 set ylabel "level of executed process"
-pl [][:3] 'stat_3' u 1:2, 'stat_4' u 1:2
+pl [][:3] 'stat_3' u 1:7, 'stat_4' u 1:7
 
