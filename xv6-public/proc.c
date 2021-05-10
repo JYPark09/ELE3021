@@ -221,7 +221,7 @@ int stride_pop(struct proc **ret)
   int i;
 
   for (i = 0; i < stride_mgr.size; ++i)
-    if (stride_mgr.list[i]->state == RUNNABLE)
+    if (RTHREAD(stride_mgr.list[i]).state == RUNNABLE)
       goto found;
 
   // there is no suitable process to run
@@ -327,6 +327,7 @@ int set_cpu_share(struct proc *p, int share)
 static struct proc *initproc;
 
 int nextpid = 1;
+int nexttid = 1;
 extern void forkret(void);
 extern void trapret(void);
 
@@ -405,6 +406,9 @@ found:
   p->state = EMBRYO;
   p->pid = nextpid++;
 
+  MAIN(p).state = EMBRYO;
+  MAIN(p).tid = nexttid++;
+
   // scheduling init
   p->schedule_type = MLFQ;
   if (mlfq_enqueue(0, p) != 0)
@@ -419,23 +423,26 @@ found:
   if ((p->kstack = kalloc()) == 0)
   {
     p->state = UNUSED;
+    MAIN(p).state = UNUSED;
     return 0;
   }
   sp = p->kstack + KSTACKSIZE;
 
   // Leave room for trap frame.
-  sp -= sizeof *p->tf;
-  p->tf = (struct trapframe *)sp;
+  sp -= sizeof *MAIN(p).tf;
+  MAIN(p).tf = (struct trapframe *)sp;
 
   // Set up new context to start executing at forkret,
   // which returns to trapret.
   sp -= 4;
   *(uint *)sp = (uint)trapret;
 
-  sp -= sizeof *p->context;
-  p->context = (struct context *)sp;
-  memset(p->context, 0, sizeof *p->context);
-  p->context->eip = (uint)forkret;
+  sp -= sizeof *MAIN(p).context;
+  MAIN(p).context = (struct context *)sp;
+  memset(MAIN(p).context, 0, sizeof *MAIN(p).context);
+  MAIN(p).context->eip = (uint)forkret;
+
+  p->curtid = 0;
 
   return p;
 }
@@ -454,14 +461,14 @@ void userinit(void)
     panic("userinit: out of memory?");
   inituvm(p->pgdir, _binary_initcode_start, (int)_binary_initcode_size);
   p->sz = PGSIZE;
-  memset(p->tf, 0, sizeof(*p->tf));
-  p->tf->cs = (SEG_UCODE << 3) | DPL_USER;
-  p->tf->ds = (SEG_UDATA << 3) | DPL_USER;
-  p->tf->es = p->tf->ds;
-  p->tf->ss = p->tf->ds;
-  p->tf->eflags = FL_IF;
-  p->tf->esp = PGSIZE;
-  p->tf->eip = 0; // beginning of initcode.S
+  memset(MAIN(p).tf, 0, sizeof(*MAIN(p).tf));
+  MAIN(p).tf->cs = (SEG_UCODE << 3) | DPL_USER;
+  MAIN(p).tf->ds = (SEG_UDATA << 3) | DPL_USER;
+  MAIN(p).tf->es = MAIN(p).tf->ds;
+  MAIN(p).tf->ss = MAIN(p).tf->ds;
+  MAIN(p).tf->eflags = FL_IF;
+  MAIN(p).tf->esp = PGSIZE;
+  MAIN(p).tf->eip = 0; // beginning of initcode.S
 
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
@@ -473,6 +480,7 @@ void userinit(void)
   acquire(&ptable.lock);
 
   p->state = RUNNABLE;
+  MAIN(p).state = RUNNABLE;
 
   release(&ptable.lock);
 }
@@ -521,14 +529,16 @@ int fork(void)
     kfree(np->kstack);
     np->kstack = 0;
     np->state = UNUSED;
+    MAIN(np).state = UNUSED;
+    np->state = UNUSED;
     return -1;
   }
   np->sz = curproc->sz;
   np->parent = curproc;
-  *np->tf = *curproc->tf;
+  *MAIN(np).tf = *RTHREAD(curproc).tf;
 
   // Clear %eax so that fork returns 0 in the child.
-  np->tf->eax = 0;
+  MAIN(np).tf->eax = 0;
 
   for (i = 0; i < NOFILE; i++)
     if (curproc->ofile[i])
@@ -542,6 +552,7 @@ int fork(void)
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
+  MAIN(np).state = RUNNABLE;
 
   release(&ptable.lock);
 
@@ -555,6 +566,7 @@ void exit(void)
 {
   struct proc *curproc = myproc();
   struct proc *p;
+  struct thread *t;
   int fd;
 
   if (curproc == initproc)
@@ -593,6 +605,13 @@ void exit(void)
 
   // Jump into the scheduler, never to return.
   curproc->state = ZOMBIE;
+
+  for (t = curproc->threads; t < &curproc->threads[NTHREAD]; ++t)
+  {
+    if (t->state != UNUSED)
+      t->state = ZOMBIE;
+  }
+
   sched();
   panic("zombie exit");
 }
@@ -602,6 +621,7 @@ void exit(void)
 int wait(void)
 {
   struct proc *p;
+  struct thread *t;
   int havekids, pid;
   struct proc *curproc = myproc();
 
@@ -650,6 +670,14 @@ int wait(void)
         p->stride.pass = 0;
         p->stride.share = 0;
 
+        // init thread data
+        for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
+        {
+          t->tid = 0;
+          t->parent = 0;
+          t->state = UNUSED;
+        }
+
         release(&ptable.lock);
         return pid;
       }
@@ -667,6 +695,26 @@ int wait(void)
   }
 }
 
+// choose next thread
+struct thread *
+thread_choose(struct proc *p)
+{
+  struct thread *t;
+  for (t = p->threads + ((p->curtid + 1) % NTHREAD); t < &p->threads[NTHREAD]; ++t)
+  {
+    if (t->state == RUNNABLE)
+      goto found;
+  }
+
+  // if there is no runnable thread, return failure
+  return 0;
+
+found:
+  p->curtid = t - p->threads;
+
+  return t;
+}
+
 struct proc *
 mlfq_choose()
 {
@@ -675,7 +723,7 @@ mlfq_choose()
 
   struct proc *ret;
   int lev = 0, size, i;
-  
+
   mlfq_mgr.pass += (stride_mgr.size > 0) * STRIDE_TOTAL_TICKETS / (double)MLFQ_CPU_SHARE;
 
   while (1)
@@ -693,7 +741,9 @@ mlfq_choose()
     size = mlfq_mgr.queue[lev].size;
     for (i = 0; i < size; ++i)
     {
-      if ((ret = mlfq_front(lev))->state != RUNNABLE)
+      ret = mlfq_front(lev);
+
+      if (RTHREAD(ret).state != RUNNABLE)
       {
         mlfq_dequeue(lev, 0);
         mlfq_enqueue(lev, ret);
@@ -795,6 +845,7 @@ schedule_choose()
 void scheduler(void)
 {
   struct proc *p;
+  struct thread *t;
   struct cpu *c = mycpu();
   c->proc = 0;
 
@@ -807,17 +858,19 @@ void scheduler(void)
     acquire(&ptable.lock);
 
     p = schedule_choose();
+    t = p ? &RTHREAD(p) : 0;
 
-    if (p != 0 && p->state == RUNNABLE)
+    if (p != 0 && t->state == RUNNABLE)
     {
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
       // before jumping back to us.
       c->proc = p;
       switchuvm(p);
-      p->state = RUNNING;
+      // p->state = RUNNING;
+      t->state = RUNNING;
 
-      swtch(&(c->scheduler), p->context);
+      swtch(&(c->scheduler), t->context);
       switchkvm();
 
       // Process is done running for now.
@@ -845,17 +898,18 @@ void sched(void)
 {
   int intena;
   struct proc *p = myproc();
+  struct thread *t = &RTHREAD(p);
 
   if (!holding(&ptable.lock))
     panic("sched ptable.lock");
   if (mycpu()->ncli != 1)
     panic("sched locks");
-  if (p->state == RUNNING)
+  if (t->state == RUNNING)
     panic("sched running");
   if (readeflags() & FL_IF)
     panic("sched interruptible");
   intena = mycpu()->intena;
-  swtch(&p->context, mycpu()->scheduler);
+  swtch(&t->context, mycpu()->scheduler);
   mycpu()->intena = intena;
 }
 
@@ -864,6 +918,7 @@ void yield(void)
 {
   acquire(&ptable.lock); //DOC: yieldlock
   myproc()->state = RUNNABLE;
+  RTHREAD(myproc()).state = RUNNABLE;
   sched();
   release(&ptable.lock);
 }
@@ -913,13 +968,13 @@ void sleep(void *chan, struct spinlock *lk)
     release(lk);
   }
   // Go to sleep.
-  p->chan = chan;
-  p->state = SLEEPING;
+  RTHREAD(p).chan = chan;
+  RTHREAD(p).state = SLEEPING;
 
   sched();
 
   // Tidy up.
-  p->chan = 0;
+  RTHREAD(p).chan = 0;
 
   // Reacquire original lock.
   if (lk != &ptable.lock)
@@ -936,10 +991,13 @@ static void
 wakeup1(void *chan)
 {
   struct proc *p;
+  struct thread *t;
 
   for (p = ptable.proc; p < &ptable.proc[NPROC]; p++)
-    if (p->state == SLEEPING && p->chan == chan)
-      p->state = RUNNABLE;
+    if (p->state == RUNNABLE)
+      for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
+        if (t->state == SLEEPING && t->chan == chan)
+          t->state = RUNNABLE;
 }
 
 // Wake up all processes sleeping on chan.
@@ -956,6 +1014,7 @@ void wakeup(void *chan)
 int kill(int pid)
 {
   struct proc *p;
+  struct thread *t;
 
   acquire(&ptable.lock);
   for (p = ptable.proc; p < &ptable.proc[NPROC]; p++)
@@ -963,9 +1022,10 @@ int kill(int pid)
     if (p->pid == pid)
     {
       p->killed = 1;
-      // Wake process from sleep if necessary.
-      if (p->state == SLEEPING)
-        p->state = RUNNABLE;
+      // Wake threads from sleep if necessary.
+      for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
+        if (t->state == SLEEPING)
+          t->state = RUNNABLE;
 
       release(&ptable.lock);
       return 0;
@@ -1004,7 +1064,7 @@ void procdump(void)
     cprintf("%d %s %s", p->pid, state, p->name);
     if (p->state == SLEEPING)
     {
-      getcallerpcs((uint *)p->context->ebp + 2, pc);
+      getcallerpcs((uint *)RTHREAD(p).context->ebp + 2, pc);
       for (i = 0; i < 10 && pc[i] != 0; i++)
         cprintf(" %p", pc[i]);
     }

@@ -39,7 +39,7 @@ trap(struct trapframe *tf)
   if(tf->trapno == T_SYSCALL){
     if(myproc()->killed)
       exit();
-    myproc()->tf = tf;
+    RTHREAD(myproc()).tf = tf;
     syscall();
     if(myproc()->killed)
       exit();
@@ -87,9 +87,9 @@ trap(struct trapframe *tf)
       panic("trap");
     }
     // In user space, assume process misbehaved.
-    cprintf("pid %d %s: trap %d err %d on cpu %d "
+    cprintf("pid %d tid %d %s: trap %d err %d on cpu %d "
             "eip 0x%x addr 0x%x--kill proc\n",
-            myproc()->pid, myproc()->name, tf->trapno,
+            myproc()->pid, RTHREAD(myproc()).tid, myproc()->name, tf->trapno,
             tf->err, cpuid(), tf->eip, rcr2());
     myproc()->killed = 1;
   }
@@ -102,7 +102,7 @@ trap(struct trapframe *tf)
 
   // Force process to give up CPU on clock tick.
   // If interrupts were on while locks held, would need to check nlock.
-  if(myproc() && myproc()->state == RUNNING &&
+  if(myproc() && RTHREAD(myproc()).state == RUNNING &&
      tf->trapno == T_IRQ0+IRQ_TIMER)
     yield();
 

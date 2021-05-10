@@ -47,6 +47,22 @@ struct stride_info {
   double pass;
 };
 
+typedef int thread_t;
+
+// Per-thread state
+struct thread {
+  struct proc *parent;        // Process that this thread belongs
+
+  thread_t tid;               // Thread ID
+
+  enum procstate state;       // Thread state
+  struct trapframe *tf;       // Trap frame for current syscall
+  struct context *context;    // swtch() here to run process
+  void *chan;                 // If non-zero, sleeping on chan
+
+  void *retval;               // Return value of this thread
+};
+
 // Per-process state
 struct proc {
   uint sz;                    // Size of process memory (bytes)
@@ -55,9 +71,6 @@ struct proc {
   enum procstate state;       // Process state
   int pid;                    // Process ID
   struct proc *parent;        // Parent process
-  struct trapframe *tf;       // Trap frame for current syscall
-  struct context *context;    // swtch() here to run process
-  void *chan;                 // If non-zero, sleeping on chan
   int killed;                 // If non-zero, have been killed
   struct file *ofile[NOFILE]; // Open files
   struct inode *cwd;          // Current directory
@@ -69,7 +82,17 @@ struct proc {
     struct mlfq_info mlfq;
     struct stride_info stride;
   };
+
+  // informations for threads
+  struct thread threads[NTHREAD];
+  thread_t curtid;
 };
+
+// Main thread of the process
+#define MAIN(p) ((p)->threads[0])
+
+// Recently executed thread
+#define RTHREAD(p) ((p)->threads[(p)->curtid])
 
 // Process memory is laid out contiguously, low addresses first:
 //   text
