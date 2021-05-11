@@ -134,3 +134,14 @@ sys_set_cpu_share(void)
 
   return set_cpu_share(p, share);
 }
+
+int
+sys_gettid(void)
+{
+  struct proc *p = myproc();
+
+  if (p == 0)
+    return -1;
+
+  return RTHREAD(p).tid;
+}

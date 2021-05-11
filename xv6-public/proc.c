@@ -760,7 +760,7 @@ mlfq_choose()
   }
 
 found:
-  cprintf("pid: %d st: %d lv: %d t: %d strs: %d mlfq_p: %d strd_p: %d\n", ret->pid, ret->schedule_type, ret->mlfq.level, ret->mlfq.executed_ticks, stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
+  // cprintf("pid: %d st: %d lv: %d t: %d strs: %d mlfq_p: %d strd_p: %d\n", ret->pid, ret->schedule_type, ret->mlfq.level, ret->mlfq.executed_ticks, stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
 
   ++ret->mlfq.executed_ticks;
   ++mlfq_mgr.executed_ticks;
@@ -812,7 +812,7 @@ stride_choose()
   if (stride_pop(&p) != 0)
     return 0;
 
-  cprintf("pid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
+  // cprintf("pid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
 
   p->stride.pass += STRIDE_TOTAL_TICKETS / (double)p->stride.share;
   // stride_mgr.pass = p->stride.pass;

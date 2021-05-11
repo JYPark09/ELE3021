@@ -47,8 +47,6 @@ struct stride_info {
   double pass;
 };
 
-typedef int thread_t;
-
 // Per-thread state
 struct thread {
   struct proc *parent;        // Process that this thread belongs
