@@ -4,7 +4,11 @@
 
 int main(int argc, char** argv)
 {
+  int i;
   int pid = fork();
+  int tid = gettid();
+
+  printf(1, "tid: %d\n", tid);
 
   if (pid < 0)
   {
@@ -12,7 +16,7 @@ int main(int argc, char** argv)
     exit();
   }
 
-  while (1)
+  for (i = 0; i < 10; ++i)
   {
     if (pid > 0)
     {
@@ -25,6 +29,8 @@ int main(int argc, char** argv)
 
     yield();
   }
+
+  wait();
 
 	exit();
 }
