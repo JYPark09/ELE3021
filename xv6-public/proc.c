@@ -1105,17 +1105,19 @@ int thread_join(thread_t thread, void **retval)
   struct proc *p;
   struct thread *t;
 
+  acquire(&ptable.lock);
+
   for (p = ptable.proc; p < &ptable.proc[NPROC]; ++p)
     if (p->state == RUNNABLE)
       for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
         if (t->state != UNUSED && t->tid == thread)
           goto found;
 
+  release(&ptable.lock);
+
   return -1;
 
 found:
-  acquire(&ptable.lock);
-
   if (t->state != ZOMBIE)
   {
     sleep((void*)thread, &ptable.lock);
