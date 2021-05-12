@@ -1,1 +1,3 @@
 .vscode
+tests/pthread/join_another_proc
+tests/pthread/join_another_proc.c
