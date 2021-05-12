@@ -656,6 +656,7 @@ int wait(void)
 
         // Found one.
         pid = p->pid;
+
         kfree(p->kstack);
         p->kstack = 0;
         freevm(p->pgdir);
@@ -760,7 +761,7 @@ mlfq_choose()
   }
 
 found:
-  // cprintf("pid: %d st: %d lv: %d t: %d strs: %d mlfq_p: %d strd_p: %d\n", ret->pid, ret->schedule_type, ret->mlfq.level, ret->mlfq.executed_ticks, stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
+  cprintf("pid: %d st: %d lv: %d t: %d strs: %d mlfq_p: %d strd_p: %d\n", ret->pid, ret->schedule_type, ret->mlfq.level, ret->mlfq.executed_ticks, stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
 
   ++ret->mlfq.executed_ticks;
   ++mlfq_mgr.executed_ticks;
@@ -812,7 +813,7 @@ stride_choose()
   if (stride_pop(&p) != 0)
     return 0;
 
-  // cprintf("pid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
+  cprintf("pid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
 
   p->stride.pass += STRIDE_TOTAL_TICKETS / (double)p->stride.share;
   // stride_mgr.pass = p->stride.pass;
@@ -867,8 +868,11 @@ void scheduler(void)
       // before jumping back to us.
       c->proc = p;
       switchuvm(p);
-      // p->state = RUNNING;
       t->state = RUNNING;
+
+      // after intoducing thread concept,
+      // state of process can be UNUSED, EMBRYO, or RUNNABLE
+      // p->state = RUNNING;
 
       swtch(&(c->scheduler), t->context);
       switchkvm();
@@ -1070,4 +1074,62 @@ void procdump(void)
     }
     cprintf("\n");
   }
+}
+
+
+/****************************************
+ *  Thread (Light Weight Process)       *
+ ****************************************/
+int thread_create(thread_t *thread, void *(*start_routine)(void*), void* arg)
+{
+    return -1;
+}
+
+void thread_exit(void *retval)
+{
+  struct proc *curproc = myproc();
+  struct thread *curthread = &RTHREAD(curproc);
+
+  acquire(&ptable.lock);
+
+  wakeup1((void*)curthread->tid);
+
+  curthread->retval = retval;
+  curthread->state = ZOMBIE;
+
+  sched();
+  panic("zombie thread exit");
+}
+
+int thread_join(thread_t thread, void **retval)
+{
+  struct proc *p;
+  struct thread *t;
+
+  for (p = ptable.proc; p < &ptable.proc[NPROC]; ++p)
+    if (p->state == RUNNABLE)
+      for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
+        if (t->state != UNUSED && t->tid == thread)
+          goto found;
+
+  return -1;
+
+found:
+  acquire(&ptable.lock);
+
+  if (t->state != ZOMBIE)
+  {
+    sleep((void*)thread, &ptable.lock);
+  }
+
+  *retval = t->retval;
+
+  // clean up thread
+  t->retval = 0;
+  t->tid = 0;
+  t->state = UNUSED;
+
+  release(&ptable.lock);
+
+  return 0;
 }
