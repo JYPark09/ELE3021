@@ -49,8 +49,6 @@ struct stride_info {
 
 // Per-thread state
 struct thread {
-  struct proc *parent;        // Process that this thread belongs
-
   thread_t tid;               // Thread ID
 
   enum procstate state;       // Thread state
