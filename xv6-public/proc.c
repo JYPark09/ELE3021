@@ -674,8 +674,7 @@ int wait(void)
         // init thread data
         for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
         {
-          t->tid = 0;
-          t->parent = 0;
+          t->tid = 0;\
           t->state = UNUSED;
         }
 
