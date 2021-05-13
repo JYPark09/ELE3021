@@ -9,8 +9,16 @@
 
 #define NUM_MLFQ_LEVEL 3
 #define MLFQ_CPU_SHARE 20
-#define MLFQ_BOOSTING_INTERVAL 100
+#define MLFQ_TIME_CONST_SHIFT 10
+#define MLFQ_TIME_CONST_MASK ((1 << MLFQ_TIME_CONST_SHIFT) - 1)
+#define MLFQ_TIME_QUANTUM_CONST \
+  ((( 5 & MLFQ_TIME_CONST_MASK) << (MLFQ_TIME_CONST_SHIFT * 0)) |\
+   ((10 & MLFQ_TIME_CONST_MASK) << (MLFQ_TIME_CONST_SHIFT * 1)) |\
+   ((20 & MLFQ_TIME_CONST_MASK) << (MLFQ_TIME_CONST_SHIFT * 2)))
+#define MLFQ_TIME_QUANTUM(level) ((MLFQ_TIME_QUANTUM_CONST >> (MLFQ_TIME_CONST_SHIFT * (level))) & MLFQ_TIME_CONST_MASK)
+#define MLFQ_BOOSTING_INTERVAL 200
 
+#define STRIDE_TIME_QUANTUM 5
 #define STRIDE_TOTAL_TICKETS 100
 
 struct
@@ -25,6 +33,17 @@ typedef struct proc_queue
   int front, rear;
   int size;
 } proc_queue_t;
+
+static int runnable_proc(struct proc *p)
+{
+  struct thread *t;
+
+  for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
+    if (t->state == RUNNABLE)
+      return 1;
+
+  return 0;
+}
 
 struct
 {
@@ -221,7 +240,7 @@ int stride_pop(struct proc **ret)
   int i;
 
   for (i = 0; i < stride_mgr.size; ++i)
-    if (RTHREAD(stride_mgr.list[i]).state == RUNNABLE)
+    if (runnable_proc(stride_mgr.list[i]))
       goto found;
 
   // there is no suitable process to run
@@ -420,13 +439,14 @@ found:
   release(&ptable.lock);
 
   // Allocate kernel stack.
-  if ((p->kstack = kalloc()) == 0)
+  if ((MAIN(p).kstack = kalloc()) == 0)
   {
     p->state = UNUSED;
     MAIN(p).state = UNUSED;
     return 0;
   }
-  sp = p->kstack + KSTACKSIZE;
+  p->kstack_pool[0] = MAIN(p).kstack;
+  sp = MAIN(p).kstack + KSTACKSIZE;
 
   // Leave room for trap frame.
   sp -= sizeof *MAIN(p).tf;
@@ -526,8 +546,8 @@ int fork(void)
   // Copy process state from proc.
   if ((np->pgdir = copyuvm(curproc->pgdir, curproc->sz)) == 0)
   {
-    kfree(np->kstack);
-    np->kstack = 0;
+    kfree(MAIN(np).kstack);
+    MAIN(np).kstack = 0;
     np->state = UNUSED;
     MAIN(np).state = UNUSED;
     np->state = UNUSED;
@@ -654,11 +674,23 @@ int wait(void)
           }
         }
 
+        // init thread data
+        for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
+        {
+          // clean up memory pool
+          if (p->kstack_pool[t - p->threads] != 0)
+            kfree(p->kstack_pool[t - p->threads]);
+
+          p->kstack_pool[t - p->threads] = 0;
+          p->ustack_pool[t - p->threads] = 0;
+
+          t->kstack = 0;
+          t->tid = 0;
+          t->state = UNUSED;
+        }
+
         // Found one.
         pid = p->pid;
-
-        kfree(p->kstack);
-        p->kstack = 0;
         freevm(p->pgdir);
         p->pid = 0;
         p->parent = 0;
@@ -670,13 +702,6 @@ int wait(void)
         p->schedule_type = MLFQ;
         p->stride.pass = 0;
         p->stride.share = 0;
-
-        // init thread data
-        for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
-        {
-          t->tid = 0;\
-          t->state = UNUSED;
-        }
 
         release(&ptable.lock);
         return pid;
@@ -696,30 +721,61 @@ int wait(void)
 }
 
 // choose next thread
-struct thread *
-thread_choose(struct proc *p)
+static int
+shift_thread(struct proc *p)
 {
+  int intena;
   struct thread *t;
-  for (t = p->threads + ((p->curtid + 1) % NTHREAD); t < &p->threads[NTHREAD]; ++t)
+  struct thread *curthread = &RTHREAD(p);
+
+  for (t = p->threads + ((p->curtid + 1) % NTHREAD); ; ++t)
   {
+    if (t == &p->threads[NTHREAD])
+      t = &p->threads[0];
+
+    // if there is no runnable thread
+    // switch to other process
+    if (t == curthread)
+      return 0;
+
     if (t->state == RUNNABLE)
-      goto found;
+    {
+      p->curtid = t - p->threads;
+      return 0;
+
+      if (p->schedule_type == MLFQ)
+      {
+        if ((p->executed_ticks % MLFQ_TIME_QUANTUM(p->mlfq.level)) == 0
+          && p->executed_ticks != MLFQ_TIME_QUANTUM(p->mlfq.level))
+          return 0;
+      }
+      else if (p->schedule_type == STRIDE)
+      {
+        if (p->executed_ticks >= STRIDE_TIME_QUANTUM)
+          return 0;
+      }
+
+      t->state = RUNNING;
+
+      // switchuvm for thread
+      pushcli();
+      mycpu()->ts.esp0 = (uint)t->kstack + KSTACKSIZE;
+      popcli();
+
+      // sched for thread
+      intena = mycpu()->intena;
+      swtch(&t->context, curthread->context);
+      mycpu()->intena = intena;
+
+      return 1;
+    }
   }
-
-  // if there is no runnable thread, return failure
-  return 0;
-
-found:
-  p->curtid = t - p->threads;
-
-  return t;
 }
 
 struct proc *
 mlfq_choose()
 {
-  static const int TIME_QUANTUM[] = {1, 2, 4};
-  static const int TIME_ALLOTMENT[] = {5, 10};
+  static const int TIME_ALLOTMENT[] = {20, 40};
 
   struct proc *ret;
   int lev = 0, size, i;
@@ -743,7 +799,7 @@ mlfq_choose()
     {
       ret = mlfq_front(lev);
 
-      if (RTHREAD(ret).state != RUNNABLE)
+      if (!runnable_proc(ret))
       {
         mlfq_dequeue(lev, 0);
         mlfq_enqueue(lev, ret);
@@ -760,25 +816,25 @@ mlfq_choose()
   }
 
 found:
-  cprintf("pid: %d st: %d lv: %d t: %d strs: %d mlfq_p: %d strd_p: %d\n", ret->pid, ret->schedule_type, ret->mlfq.level, ret->mlfq.executed_ticks, stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
+  // cprintf("pid: %d tid: %d st: %d lv: %d t: %d(%d) strs: %d mlfq_p: %d strd_p: %d\n", ret->pid, RTHREAD(ret).tid, ret->schedule_type, ret->mlfq.level, ret->executed_ticks, MLFQ_TIME_QUANTUM(lev), stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
 
-  ++ret->mlfq.executed_ticks;
+  ++ret->executed_ticks;
   ++mlfq_mgr.executed_ticks;
 
-  if (lev < NUM_MLFQ_LEVEL - 1 && ret->mlfq.executed_ticks >= TIME_ALLOTMENT[lev])
+  if (lev < NUM_MLFQ_LEVEL - 1 && ret->executed_ticks >= TIME_ALLOTMENT[lev])
   {
     mlfq_dequeue(lev, 0);
     mlfq_enqueue(lev + 1, ret);
 
-    ret->mlfq.executed_ticks = 0;
+    ret->executed_ticks = 0;
   }
-  else if (ret->mlfq.executed_ticks % TIME_QUANTUM[lev] == 0)
+  else if (ret->executed_ticks % MLFQ_TIME_QUANTUM(lev) == 0)
   {
     mlfq_dequeue(lev, 0);
     mlfq_enqueue(lev, ret);
 
     if (lev == NUM_MLFQ_LEVEL - 1)
-      ret->mlfq.executed_ticks = 0;
+      ret->executed_ticks = 0;
   }
 
   return ret;
@@ -795,7 +851,7 @@ void mlfq_boosting()
       mlfq_dequeue(lev, &p);
       mlfq_enqueue(0, p);
 
-      p->mlfq.executed_ticks = 0;
+      p->executed_ticks = 0;
     }
   }
 
@@ -812,9 +868,10 @@ stride_choose()
   if (stride_pop(&p) != 0)
     return 0;
 
-  cprintf("pid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
+  // cprintf("pid: %d tid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, RTHREAD(p).tid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
 
   p->stride.pass += STRIDE_TOTAL_TICKETS / (double)p->stride.share;
+  ++p->executed_ticks;
   // stride_mgr.pass = p->stride.pass;
 
   if (stride_insert(p) != 0)
@@ -828,10 +885,34 @@ stride_choose()
 struct proc *
 schedule_choose()
 {
-  if (stride_mgr.pass >= mlfq_mgr.pass)
-    return mlfq_choose();
+  struct proc *p;
+  struct thread *t;
+  int start = 0;
 
-  return stride_choose();
+  if (stride_mgr.pass >= mlfq_mgr.pass)
+    p = mlfq_choose();
+  else
+    p = stride_choose();
+
+  if (p != 0)
+  {
+    for (t = &RTHREAD(p); ; ++t)
+    {
+      if (t == &p->threads[NTHREAD])
+        t = &p->threads[0];
+
+      if (t->state == RUNNABLE)
+        break;
+
+      if (start && t == &RTHREAD(p))
+        panic("invalid logic");
+      start = 1;
+    }
+
+    p->curtid = t - p->threads;
+  }
+
+  return p;
 }
 
 //PAGEBREAK: 42
@@ -860,7 +941,7 @@ void scheduler(void)
     p = schedule_choose();
     t = p ? &RTHREAD(p) : 0;
 
-    if (p != 0 && t->state == RUNNABLE)
+    if (p != 0)
     {
       // Switch to chosen process.  It is the process's job
       // to release ptable.lock and then reacquire it
@@ -870,11 +951,14 @@ void scheduler(void)
       t->state = RUNNING;
 
       // after intoducing thread concept,
-      // state of process can be UNUSED, EMBRYO, or RUNNABLE
+      // state of process can be only UNUSED, EMBRYO, or RUNNABLE
       // p->state = RUNNING;
 
       swtch(&(c->scheduler), t->context);
       switchkvm();
+
+      // TEMPORARY CODE
+      shift_thread(p);
 
       // Process is done running for now.
       // It should have changed its p->state before coming back.
@@ -922,7 +1006,10 @@ void yield(void)
   acquire(&ptable.lock); //DOC: yieldlock
   myproc()->state = RUNNABLE;
   RTHREAD(myproc()).state = RUNNABLE;
-  sched();
+
+  // if (!shift_thread(myproc()))
+    sched();
+
   release(&ptable.lock);
 }
 
@@ -952,6 +1039,7 @@ void forkret(void)
 void sleep(void *chan, struct spinlock *lk)
 {
   struct proc *p = myproc();
+  struct thread *t = &RTHREAD(p);
 
   if (p == 0)
     panic("sleep");
@@ -971,13 +1059,13 @@ void sleep(void *chan, struct spinlock *lk)
     release(lk);
   }
   // Go to sleep.
-  RTHREAD(p).chan = chan;
-  RTHREAD(p).state = SLEEPING;
+  t->chan = chan;
+  t->state = SLEEPING;
 
   sched();
 
   // Tidy up.
-  RTHREAD(p).chan = 0;
+  t->chan = 0;
 
   // Reacquire original lock.
   if (lk != &ptable.lock)
@@ -1079,9 +1167,97 @@ void procdump(void)
 /****************************************
  *  Thread (Light Weight Process)       *
  ****************************************/
-int thread_create(thread_t *thread, void *(*start_routine)(void*), void* arg)
+int thread_create(thread_t *thread, void *(*start_routine)(void*), void *arg)
 {
-    return -1;
+  struct thread *nt;
+  struct proc *curproc = myproc();
+  char *sp;
+  uint sz;
+  int tidx;
+
+  acquire(&ptable.lock);
+
+  for (nt = curproc->threads; nt < &curproc->threads[NTHREAD]; ++nt)
+    if (nt->state == UNUSED)
+      goto found;
+
+  cprintf("cannot found unused thread\n");
+  release(&ptable.lock);
+
+  return -1;
+
+found:
+  tidx = nt - curproc->threads;
+  nt->state = EMBRYO;
+  nt->tid = nexttid++;
+
+  // Allocate kernel stack.
+  if (curproc->kstack_pool[tidx] == 0 && (curproc->kstack_pool[tidx] = kalloc()) == 0)
+  {
+    cprintf("cannot alloc kernel stack\n");
+    goto bad;
+  }
+  nt->kstack = curproc->kstack_pool[tidx];
+  sp = nt->kstack + KSTACKSIZE;
+
+  // Leave room for trap frame.
+  sp -= sizeof *nt->tf;
+  nt->tf = (struct trapframe *)sp;
+  *nt->tf = *RTHREAD(curproc).tf;
+
+  // Set up new context to start executing at forkret,
+  // which returns to trapret.
+  sp -= 4;
+  *(uint *)sp = (uint)trapret;
+
+  sp -= sizeof *nt->context;
+  nt->context = (struct context *) sp;
+  memset(nt->context, 0, sizeof *nt->context);
+  nt->context->eip = (uint)forkret;
+
+  // Allocate user stack.
+  if (curproc->ustack_pool[tidx] == 0)
+  {
+    sz = PGROUNDUP(curproc->sz);
+    if ((sz = allocuvm(curproc->pgdir, sz, sz + PGSIZE)) == 0)
+    {
+      cprintf("cannot alloc user stack\n");
+      goto bad;
+    }
+
+    curproc->ustack_pool[tidx] = sz;
+    curproc->sz = sz;
+  }
+  sp = (char *)curproc->ustack_pool[tidx];
+
+  // Push argument, prepare rest of stack in ustack.
+  sp -= 4;
+  *(uint *)sp = (uint)arg;
+
+  // fake return PC
+  sp -= 4;
+  *(uint *)sp = 0xffffffff;
+
+  // Commit to the user image.
+  nt->tf->eip = (uint)start_routine;
+  nt->tf->esp = (uint)sp;
+
+  *thread = nt->tid;
+
+  nt->state = RUNNABLE;
+
+  release(&ptable.lock);
+
+  return 0;
+
+bad:
+  nt->kstack = 0;
+  nt->tid = 0;
+  nt->state = UNUSED;
+
+  release(&ptable.lock);
+
+  return -1;
 }
 
 void thread_exit(void *retval)
@@ -1123,9 +1299,11 @@ found:
     sleep((void*)thread, &ptable.lock);
   }
 
-  *retval = t->retval;
+  if (retval != 0)
+    *retval = t->retval;
 
   // clean up thread
+  t->kstack = 0;
   t->retval = 0;
   t->tid = 0;
   t->state = UNUSED;

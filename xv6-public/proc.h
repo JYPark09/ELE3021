@@ -38,8 +38,6 @@ enum schedule_policy { MLFQ, STRIDE };
 
 struct mlfq_info {
   int level;          // level of queue where this process exists
-  int executed_ticks; // the number of ticks to which this process was executed
-                      // in current level
 };
 
 struct stride_info {
@@ -49,9 +47,11 @@ struct stride_info {
 
 // Per-thread state
 struct thread {
-  thread_t tid;               // Thread ID
+  char *kstack;               // Bottom of kernel stack for this thread
 
   enum procstate state;       // Thread state
+  thread_t tid;               // Thread ID
+
   struct trapframe *tf;       // Trap frame for current syscall
   struct context *context;    // swtch() here to run process
   void *chan;                 // If non-zero, sleeping on chan
@@ -63,7 +63,6 @@ struct thread {
 struct proc {
   uint sz;                    // Size of process memory (bytes)
   pde_t *pgdir;               // Page table
-  char *kstack;               // Bottom of kernel stack for this process
   enum procstate state;       // Process state
   int pid;                    // Process ID
   struct proc *parent;        // Parent process
@@ -74,6 +73,7 @@ struct proc {
 
   // informations for scheduling
   enum schedule_policy schedule_type;
+  int executed_ticks;
   union {
     struct mlfq_info mlfq;
     struct stride_info stride;
@@ -81,6 +81,8 @@ struct proc {
 
   // informations for threads
   struct thread threads[NTHREAD];
+  char *kstack_pool[NTHREAD];
+  uint  ustack_pool[NTHREAD];
   thread_t curtid;
 };
 
