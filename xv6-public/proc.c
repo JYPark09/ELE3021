@@ -445,7 +445,6 @@ found:
     MAIN(p).state = UNUSED;
     return 0;
   }
-  p->kstack_pool[0] = MAIN(p).kstack;
   sp = MAIN(p).kstack + KSTACKSIZE;
 
   // Leave room for trap frame.
@@ -678,11 +677,10 @@ int wait(void)
         for (t = p->threads; t < &p->threads[NTHREAD]; ++t)
         {
           // clean up memory pool
-          if (p->kstack_pool[t - p->threads] != 0)
-            kfree(p->kstack_pool[t - p->threads]);
-
-          p->kstack_pool[t - p->threads] = 0;
           p->ustack_pool[t - p->threads] = 0;
+
+          if (t->kstack != 0)
+            kfree(t->kstack);
 
           t->kstack = 0;
           t->tid = 0;
@@ -1192,12 +1190,11 @@ found:
   nt->tid = nexttid++;
 
   // Allocate kernel stack.
-  if (curproc->kstack_pool[tidx] == 0 && (curproc->kstack_pool[tidx] = kalloc()) == 0)
+  if ((nt->kstack = kalloc()) == 0)
   {
     cprintf("cannot alloc kernel stack\n");
     goto bad;
   }
-  nt->kstack = curproc->kstack_pool[tidx];
   sp = nt->kstack + KSTACKSIZE;
 
   // Leave room for trap frame.
@@ -1303,6 +1300,7 @@ found:
     *retval = t->retval;
 
   // clean up thread
+  kfree(t->kstack);
   t->kstack = 0;
   t->retval = 0;
   t->tid = 0;

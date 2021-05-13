@@ -81,7 +81,6 @@ struct proc {
 
   // informations for threads
   struct thread threads[NTHREAD];
-  char *kstack_pool[NTHREAD];
   uint  ustack_pool[NTHREAD];
   thread_t curtid;
 };
