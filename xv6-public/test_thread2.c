@@ -657,7 +657,7 @@ stridetest(void)
   thread_t threads[NUM_THREAD];
   int i;
   int pid;
-  int flag;
+  volatile int flag;
   void *retval;
 
   gcnt = 0;
