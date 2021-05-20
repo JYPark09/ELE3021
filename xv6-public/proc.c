@@ -567,7 +567,7 @@ int fork(void)
   safestrcpy(np->name, curproc->name, sizeof(curproc->name));
 
   pid = np->pid;
-
+  
   acquire(&ptable.lock);
 
   np->state = RUNNABLE;
@@ -718,55 +718,22 @@ int wait(void)
   }
 }
 
-// choose next thread
-static int
-shift_thread(struct proc *p)
+void incr_ticks(struct proc *p, int dbg)
 {
-  int intena;
-  struct thread *t;
-  struct thread *curthread = &RTHREAD(p);
+  (void)dbg;
 
-  for (t = p->threads + ((p->curtid + 1) % NTHREAD); ; ++t)
+  if (p->schedule_type == MLFQ)
+    cprintf("%d pid: %d tid: %d st: %d lv: %d t: %d(%d) strs: %d mlfq_p: %d strd_p: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type, p->mlfq.level, p->executed_ticks, MLFQ_TIME_QUANTUM(p->mlfq.level), stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
+  else if (p->schedule_type == STRIDE)
+    cprintf("%d pid: %d tid: %d st: %d mlfq_p: %d pass: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
+  else
+    cprintf("%d pid: %d tid: %d st: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type);
+
+  ++p->executed_ticks;
+
+  if (p->schedule_type == MLFQ)
   {
-    if (t == &p->threads[NTHREAD])
-      t = &p->threads[0];
-
-    // if there is no runnable thread
-    // switch to other process
-    if (t == curthread)
-      return 0;
-
-    if (t->state == RUNNABLE)
-    {
-      p->curtid = t - p->threads;
-      return 0;
-
-      if (p->schedule_type == MLFQ)
-      {
-        if ((p->executed_ticks % MLFQ_TIME_QUANTUM(p->mlfq.level)) == 0
-          && p->executed_ticks != MLFQ_TIME_QUANTUM(p->mlfq.level))
-          return 0;
-      }
-      else if (p->schedule_type == STRIDE)
-      {
-        if (p->executed_ticks >= STRIDE_TIME_QUANTUM)
-          return 0;
-      }
-
-      t->state = RUNNING;
-
-      // switchuvm for thread
-      pushcli();
-      mycpu()->ts.esp0 = (uint)t->kstack + KSTACKSIZE;
-      popcli();
-
-      // sched for thread
-      intena = mycpu()->intena;
-      swtch(&t->context, curthread->context);
-      mycpu()->intena = intena;
-
-      return 1;
-    }
+    ++mlfq_mgr.executed_ticks;
   }
 }
 
@@ -814,11 +781,8 @@ mlfq_choose()
   }
 
 found:
-  // cprintf("pid: %d tid: %d st: %d lv: %d t: %d(%d) strs: %d mlfq_p: %d strd_p: %d\n", ret->pid, RTHREAD(ret).tid, ret->schedule_type, ret->mlfq.level, ret->executed_ticks, MLFQ_TIME_QUANTUM(lev), stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
-
-  ++ret->executed_ticks;
-  ++mlfq_mgr.executed_ticks;
-
+  incr_ticks(ret, 0);
+  
   if (lev < NUM_MLFQ_LEVEL - 1 && ret->executed_ticks >= TIME_ALLOTMENT[lev])
   {
     mlfq_dequeue(lev, 0);
@@ -866,11 +830,9 @@ stride_choose()
   if (stride_pop(&p) != 0)
     return 0;
 
-  // cprintf("pid: %d tid: %d st: %d mlfq_p: %d pass: %d\n", p->pid, RTHREAD(p).tid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
+  incr_ticks(p, 0);
 
   p->stride.pass += STRIDE_TOTAL_TICKETS / (double)p->stride.share;
-  ++p->executed_ticks;
-  // stride_mgr.pass = p->stride.pass;
 
   if (stride_insert(p) != 0)
     panic("cannot insert process at stride");
@@ -955,9 +917,6 @@ void scheduler(void)
       swtch(&(c->scheduler), t->context);
       switchkvm();
 
-      // TEMPORARY CODE
-      shift_thread(p);
-
       // Process is done running for now.
       // It should have changed its p->state before coming back.
       c->proc = 0;
@@ -998,17 +957,80 @@ void sched(void)
   mycpu()->intena = intena;
 }
 
-// Give up the CPU for one scheduling round.
-void yield(void)
+// choose next thread
+static void shift_thread(struct proc *p)
 {
-  acquire(&ptable.lock); //DOC: yieldlock
-  myproc()->state = RUNNABLE;
-  RTHREAD(myproc()).state = RUNNABLE;
+  int intena;
+  struct thread *t;
+  struct thread *curthread = &RTHREAD(p);
 
-  // if (!shift_thread(myproc()))
-    sched();
+  acquire(&ptable.lock);
+
+  for (t = &p->threads[(p->curtid + 1) % NTHREAD]; ; ++t)
+  {
+    if (t == &p->threads[NTHREAD])
+      t = p->threads;
+
+    if (t == curthread)
+    {
+      if (t->state == RUNNING)
+      {
+        incr_ticks(p, 1);
+
+        release(&ptable.lock);
+        return;
+      }
+
+      sched();
+      panic("zombie thread");
+    }
+      
+    if (t->state == RUNNABLE)
+      break;
+  }
+
+  curthread->state = RUNNABLE;
+  t->state = RUNNING;
+  p->curtid = t - p->threads;
+
+  incr_ticks(p, 1);
+
+  // switchuvm for thread
+  pushcli();
+  mycpu()->ts.esp0 = (uint)t->kstack + KSTACKSIZE;
+  popcli();
+
+  // sched for thread
+  intena = mycpu()->intena;
+  swtch(&curthread->context, t->context);
+  mycpu()->intena = intena;
 
   release(&ptable.lock);
+}
+
+// Give up the CPU for one scheduling round.
+static void shift_process(struct proc *p)
+{
+  acquire(&ptable.lock); //DOC: yieldlock
+  p->state = RUNNABLE;
+  RTHREAD(p).state = RUNNABLE;
+  sched();
+  release(&ptable.lock);
+}
+
+void yield(void)
+{
+  struct proc *p = myproc();
+
+  if ((p->schedule_type == MLFQ && (p->executed_ticks % MLFQ_TIME_QUANTUM(p->mlfq.level) != 0))
+    || (p->schedule_type == STRIDE && (p->executed_ticks < STRIDE_TIME_QUANTUM)))
+  {
+    shift_thread(p);
+  }
+  else
+  {
+    shift_process(p);
+  }
 }
 
 // A fork child's very first scheduling by scheduler()
