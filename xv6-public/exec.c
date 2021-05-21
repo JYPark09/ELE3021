@@ -18,6 +18,7 @@ exec(char *path, char **argv)
   struct proghdr ph;
   pde_t *pgdir, *oldpgdir;
   struct proc *curproc = myproc();
+  struct thread *t;
 
   begin_op();
 
@@ -107,15 +108,15 @@ exec(char *path, char **argv)
   MAIN(curproc).tf->esp = sp;
   curproc->curtid = 0;
 
-  for (i = 1; i < NTHREAD; ++i)
+  for (t = &curproc->threads[1]; t < &curproc->threads[NTHREAD]; ++t)
   {
-    if (curproc->threads[i].kstack)
-      kfree(curproc->threads[i].kstack);
+    if (t->kstack)
+      kfree(t->kstack);
 
-    curproc->threads[i].kstack = 0;
-    curproc->threads[i].state = UNUSED;
-    curproc->threads[i].tid = 0;
-    curproc->threads[i].retval = 0;
+    t->kstack = 0;
+    t->state = UNUSED;
+    t->tid = 0;
+    t->retval = 0;
   }
 
   switchuvm(curproc);
