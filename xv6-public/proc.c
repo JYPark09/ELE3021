@@ -718,22 +718,30 @@ int wait(void)
   }
 }
 
+// dbg 0 - from mlfq_choose or stride_choose
+// dbg 1 - else
 void incr_ticks(struct proc *p, int dbg)
 {
-  (void)dbg;
-
-  if (p->schedule_type == MLFQ)
-    cprintf("%d pid: %d tid: %d st: %d lv: %d t: %d(%d) strs: %d mlfq_p: %d strd_p: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type, p->mlfq.level, p->executed_ticks, MLFQ_TIME_QUANTUM(p->mlfq.level), stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
-  else if (p->schedule_type == STRIDE)
-    cprintf("%d pid: %d tid: %d st: %d mlfq_p: %d pass: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
-  else
-    cprintf("%d pid: %d tid: %d st: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type);
+  // if (p->schedule_type == MLFQ)
+  //   cprintf("%d pid: %d tid: %d st: %d lv: %d t: %d(%d) strs: %d mlfq_p: %d strd_p: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type, p->mlfq.level, p->executed_ticks, MLFQ_TIME_QUANTUM(p->mlfq.level), stride_mgr.size, (int)mlfq_mgr.pass, (int)stride_mgr.pass);
+  // else if (p->schedule_type == STRIDE)
+  //   cprintf("%d pid: %d tid: %d st: %d mlfq_p: %d pass: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type, (int)mlfq_mgr.pass, (int)p->stride.pass);
+  // else
+  //   cprintf("%d pid: %d tid: %d st: %d\n", dbg, p->pid, RTHREAD(p).tid, p->schedule_type);
 
   ++p->executed_ticks;
 
   if (p->schedule_type == MLFQ)
   {
     ++mlfq_mgr.executed_ticks;
+
+    if (dbg != 0)
+      mlfq_mgr.pass += (stride_mgr.size > 0) * STRIDE_TOTAL_TICKETS / (double)MLFQ_CPU_SHARE;
+  }
+  else if (p->schedule_type == STRIDE)
+  {
+    if (dbg != 0)
+      stride_mgr.pass += (stride_mgr.size > 0) * STRIDE_TOTAL_TICKETS / (double)stride_mgr.share;
   }
 }
 
@@ -1022,7 +1030,12 @@ void yield(void)
 {
   struct proc *p = myproc();
 
-  if ((p->schedule_type == MLFQ && (p->executed_ticks % MLFQ_TIME_QUANTUM(p->mlfq.level) != 0))
+  if (p->state != RUNNABLE)
+  {
+    panic("why you call me...?");
+  }
+
+  if ((p->schedule_type == MLFQ && (((1 + p->executed_ticks) % MLFQ_TIME_QUANTUM(p->mlfq.level)) != 0))
     || (p->schedule_type == STRIDE && (p->executed_ticks < STRIDE_TIME_QUANTUM)))
   {
     shift_thread(p);
