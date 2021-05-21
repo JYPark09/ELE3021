@@ -573,6 +573,11 @@ int fork(void)
   np->state = RUNNABLE;
   MAIN(np).state = RUNNABLE;
 
+  for (i = 0; i < NTHREAD; ++i)
+    np->ustack_pool[i] = curproc->ustack_pool[i];
+  np->ustack_pool[0] = curproc->ustack_pool[curproc->curtid];
+  np->ustack_pool[curproc->curtid] = curproc->ustack_pool[0];
+
   release(&ptable.lock);
 
   return pid;
