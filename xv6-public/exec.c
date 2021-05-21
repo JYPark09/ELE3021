@@ -97,8 +97,27 @@ exec(char *path, char **argv)
   oldpgdir = curproc->pgdir;
   curproc->pgdir = pgdir;
   curproc->sz = sz;
+  if (curproc->curtid != 0)
+  {
+    curproc->ustack_pool[0] = sz;
+    MAIN(curproc) = curproc->threads[curproc->curtid];
+    curproc->threads[curproc->curtid].kstack = 0;
+  }
   MAIN(curproc).tf->eip = elf.entry;  // main
   MAIN(curproc).tf->esp = sp;
+  curproc->curtid = 0;
+
+  for (i = 1; i < NTHREAD; ++i)
+  {
+    if (curproc->threads[i].kstack)
+      kfree(curproc->threads[i].kstack);
+
+    curproc->threads[i].kstack = 0;
+    curproc->threads[i].state = UNUSED;
+    curproc->threads[i].tid = 0;
+    curproc->threads[i].retval = 0;
+  }
+
   switchuvm(curproc);
   freevm(oldpgdir);
   return 0;
