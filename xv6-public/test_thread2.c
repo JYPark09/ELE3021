@@ -638,7 +638,7 @@ sleeptest(void)
 void*
 stridethreadmain(void *arg)
 {
-  int *flag = (int*)arg;
+  volatile int *flag = (int*)arg;
   int t;
   while(*flag){
     while(*flag == 1){
@@ -657,7 +657,7 @@ stridetest(void)
   thread_t threads[NUM_THREAD];
   int i;
   int pid;
-  volatile int flag;
+  int flag;
   void *retval;
 
   gcnt = 0;
