@@ -756,7 +756,10 @@ void incr_ticks(struct proc *p, int dbg)
   else if (p->schedule_type == STRIDE)
   {
     if (dbg != 0)
+    {
+      p->stride.pass += STRIDE_TOTAL_TICKETS / (double)p->stride.share;
       stride_mgr.pass += (stride_mgr.size > 0) * STRIDE_TOTAL_TICKETS / (double)stride_mgr.share;
+    }
   }
 }
 
@@ -1057,6 +1060,9 @@ void yield(void)
   }
   else
   {
+    if (p->schedule_type == STRIDE)
+      p->executed_ticks = 0;
+
     shift_process(p);
   }
 }
