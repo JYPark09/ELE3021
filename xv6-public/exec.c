@@ -117,6 +117,8 @@ exec(char *path, char **argv)
     t->state = UNUSED;
     t->tid = 0;
     t->retval = 0;
+
+    curproc->ustack_pool[t - curproc->threads] = 0;
   }
 
   switchuvm(curproc);
