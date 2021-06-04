@@ -452,5 +452,5 @@ sys_sync(void)
 int
 sys_get_log_num(void)
 {
-  return 0;
+  return get_log_num();
 }
