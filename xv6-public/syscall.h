@@ -29,3 +29,5 @@
 #define SYS_thread_create 28
 #define SYS_thread_exit 29
 #define SYS_thread_join 30
+#define SYS_sync 31
+#define SYS_get_log_num 32

@@ -32,6 +32,8 @@ int gettid(void);
 int thread_create(thread_t *thread, void *(*start_routine)(void*), void* arg);
 int thread_exit(void *retval);
 int thread_join(thread_t thread, void **retval);
+int sync(void);
+int get_log_num(void);
 
 // ulib.c
 int stat(const char *, struct stat *);
