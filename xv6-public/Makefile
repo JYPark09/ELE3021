@@ -188,6 +188,7 @@ UPROGS=\
 	_test_scheduler\
 	_test_thread\
 	_test_thread2\
+	_test_file\
 
 fs.img: mkfs README $(UPROGS)
 	./mkfs fs.img README $(UPROGS)
@@ -258,7 +259,7 @@ EXTRA=\
 	mkfs.c ulib.c user.h cat.c echo.c forktest.c grep.c kill.c\
 	ln.c ls.c mkdir.c rm.c stressfs.c usertests.c wc.c zombie.c\
 	printf.c umalloc.c my_userapp.c test.c test_yield.c test_scheduler.c\
-	test_thread.c test_thread2.c\
+	test_thread.c test_thread2.c test_file.c\
 	README dot-bochsrc *.pl toc.* runoff runoff1 runoff.list\
 	.gdbinit.tmpl gdbutil\
 
