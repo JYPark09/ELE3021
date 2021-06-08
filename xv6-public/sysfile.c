@@ -446,6 +446,7 @@ sys_pipe(void)
 int
 sys_sync(void)
 {
+  commit_sync();
   return 0;
 }
 
