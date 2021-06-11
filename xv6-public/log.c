@@ -126,7 +126,9 @@ commit_sync(void)
 {
   acquire(&log.lock);
   if (log.outstanding > 0)
-    panic("log.outstanding");
+  {
+    sleep(&log, &log.lock);
+  }
 
   if (log.committing)
     panic("log.committing");
