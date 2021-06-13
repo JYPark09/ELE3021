@@ -31,3 +31,5 @@
 #define SYS_thread_join 30
 #define SYS_sync 31
 #define SYS_get_log_num 32
+#define SYS_pwrite 33
+#define SYS_pread 34

@@ -34,6 +34,8 @@ int thread_exit(void *retval);
 int thread_join(thread_t thread, void **retval);
 int sync(void);
 int get_log_num(void);
+int pwrite(int fd, void* addr, int n, int off);
+int pread(int fd, void* addr, int n, int off);
 
 // ulib.c
 int stat(const char *, struct stat *);

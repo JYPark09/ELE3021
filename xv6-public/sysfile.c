@@ -455,3 +455,15 @@ sys_get_log_num(void)
 {
   return get_log_num();
 }
+
+int
+sys_pwrite(void)
+{
+  return 0;
+}
+
+int
+sys_pread(void)
+{
+  return 0;
+}
