@@ -130,6 +130,8 @@ commit_sync(void)
     sleep(&log, &log.lock);
   }
 
+  // now log.oustanding is 0. so there is no running fs syscall.
+  // therefore just one committing is required.
   if (log.committing)
   {
     release(&log.lock);
