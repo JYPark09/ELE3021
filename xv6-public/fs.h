@@ -32,7 +32,7 @@ enum FS_ADDR_TYPE {
   FS_ADDR_SINGLE_INDIRECT = NDIRECT,
   FS_ADDR_DOUBLY_INDIRECT = NDIRECT + 1,
   FS_ADDR_TRIPLE_INDIRECT = NDIRECT + 2
-}
+};
 
 // On-disk inode structure
 struct dinode {
