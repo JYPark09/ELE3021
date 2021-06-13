@@ -30,11 +30,9 @@ int main(int argc, char *argv[])
     path[4] = '2';
     fd = open(path, O_CREATE | O_RDWR);
 
-    for (i = 0; i < 20; ++i)
+    for (i = 0; i < 36864; ++i)
     {
-        printf(1, "%d before: %d ", i, get_log_num());
         write(fd, data, sizeof data);
-        printf(1, "after: %d\n", get_log_num());
     }
 
     sync();
