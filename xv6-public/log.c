@@ -125,13 +125,16 @@ void
 commit_sync(void)
 {
   acquire(&log.lock);
-  if (log.outstanding > 0)
+  while (log.outstanding > 0)
   {
     sleep(&log, &log.lock);
   }
 
   if (log.committing)
-    panic("log.committing");
+  {
+    release(&log.lock);
+    return;
+  }
     
   log.committing = 1;
   release(&log.lock);
@@ -172,6 +175,10 @@ end_op(void)
 {
   acquire(&log.lock);
   log.outstanding -= 1;
+
+  if (log.outstanding == 0)
+    wakeup(&log);
+
   release(&log.lock);
 }
 
