@@ -43,6 +43,19 @@ enum FS_ADDR_TYPE {
 milestone1의 영향으로 rm 프로그램에서 발생한 수정이 disk에 반영이 안되는 문제가 있었다.
 따라서 rm 프로그램이 종료되기 전에 `sync` system call을 호출해 무조건 반영되도록 수정하여 문제를 해결했다.
 
+### 4. Stress test
+대량의 fs 수정이 발생하면 buffer의 크기가 부족해져 kernel panic이 발생하는 issue가 존재했다.
+따라서 이를 해결하기 위해 `begin_op`에서 sync를 하는 조건을 다음과 같이 수정했다.
+
+(수정전)
+```c++
+log.lh.n + (log.outstanding+1)*MAXOPBLOCKS > LOGSIZE
+```
+
+(수정후)
+```c++
+log.lh.n + (log.outstanding+1)*MAXOPBLOCKS > LOGSIZE-1
+```
 
 ## Self-Test
 ### 1. Create a big file.
