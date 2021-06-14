@@ -33,8 +33,10 @@ void            fileinit(void);
 int             fileread(struct file*, char*, int n);
 int             filestat(struct file*, struct stat*);
 int             filewrite(struct file*, char*, int n);
-void            commit_sync(void);
+void            commit_sync(int);
 int             get_log_num(void);
+int             filepread(struct file*, char*, int, int);
+int             filepwrite(struct file*, char*, int, int);
 
 // fs.c
 void            readsb(int dev, struct superblock *sb);

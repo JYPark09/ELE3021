@@ -446,7 +446,7 @@ sys_pipe(void)
 int
 sys_sync(void)
 {
-  commit_sync();
+  commit_sync(0);
   return 0;
 }
 
@@ -459,11 +459,25 @@ sys_get_log_num(void)
 int
 sys_pwrite(void)
 {
-  return 0;
+  struct file *f;
+  int n, off;
+  char *p;
+
+  if (argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argptr(1, &p, n) < 0 || argint(3, &off) < 0)
+    return -1;
+
+  return filepwrite(f, p, n, off);
 }
 
 int
 sys_pread(void)
 {
-  return 0;
+  struct file *f;
+  int n, off;
+  char *p;
+
+  if (argfd(0, 0, &f) < 0 || argint(2, &n) < 0 || argptr(1, &p, n) < 0 || argint(3, &off) < 0)
+    return -1;
+
+  return filepread(f, p, n, off);
 }

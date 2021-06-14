@@ -122,9 +122,10 @@ recover_from_log(void)
 }
 
 void
-commit_sync(void)
+commit_sync(int locked)
 {
-  acquire(&log.lock);
+  if (!locked) acquire(&log.lock);
+
   while (log.outstanding > 0)
   {
     sleep(&log, &log.lock);
@@ -134,7 +135,11 @@ commit_sync(void)
   // therefore just one committing is required.
   if (log.committing)
   {
-    release(&log.lock);
+	while (log.committing)
+	  sleep(&log, &log.lock);
+
+	if (!locked) release(&log.lock);
+
     return;
   }
     
@@ -147,7 +152,8 @@ commit_sync(void)
   acquire(&log.lock);
   log.committing = 0;
   wakeup(&log);
-  release(&log.lock);
+
+  if (!locked) release(&log.lock);
 }
 
 // called at the start of each FS system call.
@@ -158,10 +164,8 @@ begin_op(void)
   while(1){
     if(log.committing){
       sleep(&log, &log.lock);
-    } else if(log.lh.n + (log.outstanding+1)*MAXOPBLOCKS > LOGSIZE){
-      release(&log.lock);
-      commit_sync();
-      acquire(&log.lock);
+    } else if(log.lh.n + (log.outstanding+1)*MAXOPBLOCKS > LOGSIZE-1){
+      commit_sync(1);
     } else {
       log.outstanding += 1;
       release(&log.lock);

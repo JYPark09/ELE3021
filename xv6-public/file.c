@@ -155,3 +155,50 @@ filewrite(struct file *f, char *addr, int n)
   panic("filewrite");
 }
 
+int
+filepread(struct file *f, char *addr, int n, int off)
+{
+  int r;
+
+  if (f->readable == 0 || f->type != FD_INODE)
+    return -1;
+
+  ilock(f->ip);
+  r = readi(f->ip, addr, off, n);
+  iunlock(f->ip);
+
+  return r;
+}
+
+int
+filepwrite(struct file *f, char *addr, int n, int off)
+{
+  int r;
+
+  if (f->writable == 0 || f->type != FD_INODE)
+    return -1;
+
+  int max = ((MAXOPBLOCKS-1-1-2) / 2) * 512;
+  int i = 0;
+
+  while (i < n)
+  {
+    int n1 = n - i;
+    if (n1 > max)
+      n1 = max;
+
+    begin_op();
+    ilock(f->ip);
+    r = writei(f->ip, addr + i, off, n1);
+    iunlock(f->ip);
+    end_op();
+
+    if (r < 0)
+      break;
+    if (r != n1)
+      panic("short filepwrite");
+    i += r;
+  }
+  return i == n ? n : -1;
+}
+
